@@ -55,6 +55,7 @@ export interface CompanySkill {
   authorName: string | null;
   homepageUrl: string | null;
   categories: string[];
+  accessSourceId?: string | null;
   sharingScope: CompanySkillSharingScope;
   publicShareToken: string | null;
   forkedFromSkillId: string | null;
@@ -89,6 +90,7 @@ export interface CompanySkillListItem {
   authorName: string | null;
   homepageUrl: string | null;
   categories: string[];
+  accessSourceId?: string | null;
   sharingScope: CompanySkillSharingScope;
   publicShareToken: string | null;
   forkedFromSkillId: string | null;
@@ -136,7 +138,7 @@ export interface CompanySkillDetail extends CompanySkill {
   sourceLabel: string | null;
   sourceBadge: CompanySkillSourceBadge;
   sourcePath: string | null;
-  currentVersion: CompanySkillVersion | null;
+  currentVersion: CompanySkillVersionSummary | null;
   starredByCurrentActor: boolean;
 }
 
@@ -156,6 +158,8 @@ export interface CompanySkillCategoryCount {
 }
 
 export interface CompanySkillVersion {
+  repositorySnapshotId?: string | null;
+  repositorySkillPath?: string | null;
   id: string;
   companyId: string;
   companySkillId: string;
@@ -169,6 +173,11 @@ export interface CompanySkillVersion {
   authorUserId: string | null;
   createdAt: Date;
 }
+
+/** Version listings carry file names/kinds; fetch one version to read its bytes. */
+export type CompanySkillVersionSummary = Omit<CompanySkillVersion, "fileInventory"> & {
+  fileInventory: CompanySkillFileInventoryEntry[];
+};
 
 export interface CompanySkillVersionCreateRequest {
   label?: string | null;
@@ -604,7 +613,7 @@ export interface CompanySkillTestRunHarnessContent {
 }
 
 export interface CompanySkillTestRunDetail extends CompanySkillTestRun {
-  skillVersion: CompanySkillVersion;
+  skillVersion: CompanySkillVersionSummary;
   outputBody: string;
   harnessContent: CompanySkillTestRunHarnessContent;
   harnessIssue: {

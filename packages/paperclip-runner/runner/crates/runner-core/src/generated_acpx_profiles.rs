@@ -10,27 +10,40 @@ pub(crate) struct AcpxReleaseProfile {
     pub agent_runtime_version: Option<&'static str>,
     pub command_digest: &'static str,
     pub requires_provider_policy: bool,
+    pub qualification_pending: bool,
 }
 
 pub(crate) fn acpx_release_profile(agent: &str) -> Option<AcpxReleaseProfile> {
     Some(match agent {
+        "antigravity" => AcpxReleaseProfile {
+            agent_server_package: "native:antigravity-acp",
+            agent_server_version: "1.4.3",
+            agent_runtime_package: Some("native:antigravity-localharness"),
+            agent_runtime_version: Some("1.4.3"),
+            command_digest:
+                "sha256:acf5f574b6b9ec4388ff9d081890caa330e66bf1ae3fe3b08e7f0fb0e851b9ce",
+            requires_provider_policy: true,
+            qualification_pending: true,
+        },
         "grok" => AcpxReleaseProfile {
             agent_server_package: "builtin:grok-acp",
             agent_server_version: "1",
             agent_runtime_package: Some("native:grok"),
             agent_runtime_version: Some("1.0.13"),
             command_digest:
-                "sha256:f0b698395a3704ed2ffaf84ea19bdb20c36c8a0a70b7c629c7b6ffe144e59e55",
+                "sha256:658e6d41ce6fc7080aa6655d7a97121b3cae6214f2d4c074284d958b95bbe769",
             requires_provider_policy: false,
+            qualification_pending: false,
         },
         "pi" => AcpxReleaseProfile {
             agent_server_package: "pi-acp",
             agent_server_version: "0.0.33",
             agent_runtime_package: Some("@earendil-works/pi-coding-agent"),
-            agent_runtime_version: Some("0.84.2"),
+            agent_runtime_version: Some("1.0.0"),
             command_digest:
-                "sha256:8c696f38296d53d0061fa11534570c5ddd951b63532aed30e0f1fcc676dc169f",
+                "sha256:9473de6ef4baf2bd82fe8b6757239bdc160960b0a78ae6f47fa9e0996544226c",
             requires_provider_policy: true,
+            qualification_pending: false,
         },
         "cursor" => AcpxReleaseProfile {
             agent_server_package: "cursor-agent",
@@ -38,8 +51,9 @@ pub(crate) fn acpx_release_profile(agent: &str) -> Option<AcpxReleaseProfile> {
             agent_runtime_package: None,
             agent_runtime_version: None,
             command_digest:
-                "sha256:a5e70580e4933a1a9248cd3c1b16500c6c93e1e14913e0a98cd5ef878bd53d39",
+                "sha256:759e7415fea8ed2b6b0e6f362b57652b8768835f9d1fdae4a94c1b5eb3669301",
             requires_provider_policy: true,
+            qualification_pending: false,
         },
         "copilot" => AcpxReleaseProfile {
             agent_server_package: "@github/copilot",
@@ -47,8 +61,9 @@ pub(crate) fn acpx_release_profile(agent: &str) -> Option<AcpxReleaseProfile> {
             agent_runtime_package: None,
             agent_runtime_version: None,
             command_digest:
-                "sha256:b18c01603dd0169d233140709cfaa8bf5304a03cf5de78ca4f625f30013e8457",
+                "sha256:b9c13b83628be07086a88394ae671997291b77bbdbf45b0bd1c4e91b7121bc9d",
             requires_provider_policy: true,
+            qualification_pending: false,
         },
         "claude" => AcpxReleaseProfile {
             agent_server_package: "@agentclientprotocol/claude-agent-acp",
@@ -58,6 +73,7 @@ pub(crate) fn acpx_release_profile(agent: &str) -> Option<AcpxReleaseProfile> {
             command_digest:
                 "sha256:9d73d1f0f121fb96cc8badb28c22d5bff02d8582eb2e40360a81c189e1b9422a",
             requires_provider_policy: false,
+            qualification_pending: false,
         },
         "codex" => AcpxReleaseProfile {
             agent_server_package: "@agentclientprotocol/codex-acp",
@@ -65,8 +81,9 @@ pub(crate) fn acpx_release_profile(agent: &str) -> Option<AcpxReleaseProfile> {
             agent_runtime_package: Some("@openai/codex"),
             agent_runtime_version: Some("0.160.0"),
             command_digest:
-                "sha256:c4538599d1ab767db5dff50934f13bb5ba313a59d9c4a83e993fac4617ea63d3",
+                "sha256:443491f4e814501a5dc47347e4510e84faeec9c9382e2d4e53bfe69386d5aabc",
             requires_provider_policy: false,
+            qualification_pending: false,
         },
         _ => return None,
     })

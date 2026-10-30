@@ -4,17 +4,31 @@ export const ACPX_DRIVER_KIND = "acpx_runtime" as const;
 export const ACPX_DRIVER_PROTOCOL_VERSION = 1 as const;
 
 export const QUALIFIED_ACPX_PROFILE_DATA = {
+  "antigravity": {
+    "driverKind": "acpx_runtime",
+    "protocolVersion": 1,
+    "acpxVersion": "0.13.1",
+    "agent": "antigravity",
+    "agentProfileVersion": 1,
+    "agentServerPackage": "native:antigravity-acp",
+    "agentServerVersion": "1.4.3",
+    "agentRuntimePackage": "native:antigravity-localharness",
+    "agentRuntimeVersion": "1.4.3",
+    "commandDigest": "sha256:acf5f574b6b9ec4388ff9d081890caa330e66bf1ae3fe3b08e7f0fb0e851b9ce",
+    "qualificationStatus": "pending",
+    "permissionPolicy": "interactive"
+  },
   "grok": {
     "driverKind": "acpx_runtime",
     "protocolVersion": 1,
     "acpxVersion": "0.13.1",
     "agent": "grok",
-    "agentProfileVersion": 1,
+    "agentProfileVersion": 15,
     "agentServerPackage": "builtin:grok-acp",
     "agentServerVersion": "1",
     "agentRuntimePackage": "native:grok",
     "agentRuntimeVersion": "1.0.13",
-    "commandDigest": "sha256:f0b698395a3704ed2ffaf84ea19bdb20c36c8a0a70b7c629c7b6ffe144e59e55",
+    "commandDigest": "sha256:658e6d41ce6fc7080aa6655d7a97121b3cae6214f2d4c074284d958b95bbe769",
     "permissionPolicy": "interactive"
   },
   "pi": {
@@ -22,12 +36,12 @@ export const QUALIFIED_ACPX_PROFILE_DATA = {
     "protocolVersion": 1,
     "acpxVersion": "0.13.1",
     "agent": "pi",
-    "agentProfileVersion": 1,
+    "agentProfileVersion": 35,
     "agentServerPackage": "pi-acp",
     "agentServerVersion": "0.0.33",
     "agentRuntimePackage": "@earendil-works/pi-coding-agent",
-    "agentRuntimeVersion": "0.84.2",
-    "commandDigest": "sha256:8c696f38296d53d0061fa11534570c5ddd951b63532aed30e0f1fcc676dc169f",
+    "agentRuntimeVersion": "1.0.0",
+    "commandDigest": "sha256:9473de6ef4baf2bd82fe8b6757239bdc160960b0a78ae6f47fa9e0996544226c",
     "permissionPolicy": "interactive"
   },
   "cursor": {
@@ -35,12 +49,12 @@ export const QUALIFIED_ACPX_PROFILE_DATA = {
     "protocolVersion": 1,
     "acpxVersion": "0.13.1",
     "agent": "cursor",
-    "agentProfileVersion": 14,
+    "agentProfileVersion": 16,
     "agentServerPackage": "cursor-agent",
     "agentServerVersion": "2026.09.26-dd393fe",
     "agentRuntimePackage": null,
     "agentRuntimeVersion": null,
-    "commandDigest": "sha256:a5e70580e4933a1a9248cd3c1b16500c6c93e1e14913e0a98cd5ef878bd53d39",
+    "commandDigest": "sha256:759e7415fea8ed2b6b0e6f362b57652b8768835f9d1fdae4a94c1b5eb3669301",
     "permissionPolicy": "interactive"
   },
   "copilot": {
@@ -48,13 +62,12 @@ export const QUALIFIED_ACPX_PROFILE_DATA = {
     "protocolVersion": 1,
     "acpxVersion": "0.13.1",
     "agent": "copilot",
-    "agentProfileVersion": 2,
+    "agentProfileVersion": 88,
     "agentServerPackage": "@github/copilot",
     "agentServerVersion": "1.0.88",
     "agentRuntimePackage": null,
     "agentRuntimeVersion": null,
-    "commandDigest": "sha256:b18c01603dd0169d233140709cfaa8bf5304a03cf5de78ca4f625f30013e8457",
-    "qualificationStatus": "pending",
+    "commandDigest": "sha256:b9c13b83628be07086a88394ae671997291b77bbdbf45b0bd1c4e91b7121bc9d",
     "permissionPolicy": "interactive"
   },
   "claude": {
@@ -80,7 +93,7 @@ export const QUALIFIED_ACPX_PROFILE_DATA = {
     "agentServerVersion": "1.6.2",
     "agentRuntimePackage": "@openai/codex",
     "agentRuntimeVersion": "0.160.0",
-    "commandDigest": "sha256:c4538599d1ab767db5dff50934f13bb5ba313a59d9c4a83e993fac4617ea63d3",
+    "commandDigest": "sha256:443491f4e814501a5dc47347e4510e84faeec9c9382e2d4e53bfe69386d5aabc",
     "permissionPolicy": "interactive"
   }
 } as const;
@@ -100,5 +113,13 @@ export const CURSOR_DISTRIBUTION_PINS = {
     "closureSha256": "eadb8bb8ffb0450455b15b88c9b230307a9e149958a0c452d16dd157b4633d74",
     "executable": "node",
     "entrypoint": "index.js"
+  }
+} as const;
+
+export const ANTIGRAVITY_DISTRIBUTION_PINS = {
+  "darwin-arm64": {
+    "closureSha256": "044792d793e203bc8b4524a418f1816c4d34db67bb41fa4bae5947a050c49b4a",
+    "executable": "agy_acp_server.par",
+    "args": []
   }
 } as const;
