@@ -17,7 +17,7 @@ RUN cargo build --locked --release -j 2 -p paperclip-runner-core --bin paperclip
     && install -m 0755 target/release/paperclip-runnerd /usr/local/bin/paperclip-runnerd \
     && rm -rf target /usr/local/cargo/registry /usr/local/cargo/git
 
-FROM node:24.21.0-bookworm@sha256:5a750d3be5e5c80275f8c9a5367c3aed99c2875656590c8d0701c7ee687f5f0a AS provider-pack-build
+FROM node:24.22.1-bookworm@sha256:d862bb5d082c5ae0210ac07e8c0344cb8cf7bef6d78e9b8c50c179da923108ea AS provider-pack-build
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 # Bound build-time memory on hosts that expose many CPUs but little RAM.
 # These settings belong only to this build stage, never the runtime image.

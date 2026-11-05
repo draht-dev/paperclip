@@ -4,6 +4,9 @@
  * install with no working auth at all. This suite rewinds the migration,
  * seeds the pre-upgrade rows an existing deployment would have, and re-applies
  * it — a backfill narrowed to one provider fails here.
+ *
+ * The migration test below exercises 0230 in isolation (historical upgrade
+ * path); 0432 later relaxes the column again for Better Auth 1.7.3+.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -41,20 +44,15 @@ async function migrationHash() {
 }
 
 describe("account issuer schema", () => {
-  it("declares the column Better Auth requires and the key it indexes on", () => {
+  // Better Auth 1.7.3+ no longer writes `issuer` and keys accounts by
+  // `(providerId, accountId)` again, so 0432 relaxes the column to nullable
+  // and drops the `(issuer, accountId)` unique index that 0230 added.
+  it("keeps issuer as a nullable legacy column without the unique index", () => {
     const config = getTableConfig(authAccounts);
     const issuer = config.columns.find((column) => column.name === "issuer");
     expect(issuer).toBeDefined();
-    expect(issuer?.notNull).toBe(true);
-
-    // Better Auth declares `(issuer, accountId)` unique on the account model
-    // and resolves accounts by that pair.
-    const unique = config.indexes.find((index) => index.config.name === UNIQUE_INDEX);
-    expect(unique?.config.unique).toBe(true);
-    expect(unique?.config.columns.map((column) => (column as { name: string }).name)).toEqual([
-      "issuer",
-      "account_id",
-    ]);
+    expect(issuer?.notNull).toBe(false);
+    expect(config.indexes.find((index) => index.config.name === UNIQUE_INDEX)).toBeUndefined();
   });
 });
 
