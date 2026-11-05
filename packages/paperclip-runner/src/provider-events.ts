@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
 import { redactCodexDiagnostic } from "./drivers/codex/diagnostic-redaction.js";
+import {
+  toolFileChangesFromAcpContent,
+  toolFileChangesFromCodexChanges,
+  type WorkspaceRoots,
+} from "./tool-file-changes.js";
+
+/** Context a canonical mapper needs to make provider file paths workspace-relative. */
+export interface CanonicalProviderEventContext {
+  workingDirectory?: WorkspaceRoots;
+}
 
 /**
  * Structural subset of an ACP runtime event consumed by the canonical event
@@ -264,6 +274,95 @@ function boundedAcpxLifecycleLocations(value: unknown): unknown[] | undefined {
   });
 }
 
+const MAX_ACP_META_DEPTH = 6;
+const MAX_ACP_META_ENTRIES = 64;
+const MAX_ACP_META_STRING_BYTES = 4_000;
+const MAX_ACP_META_TOTAL_BYTES = 16_000;
+const UNSAFE_ACP_META_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/**
+ * Bounded, JSON-safe copy of an ACP update `_meta` object. The patched ACPX
+ * runtime forwards `_meta` unvalidated on tool and status events (for example
+ * Claude's `_meta.claudeCode.toolName`, `parentToolUseId`, `terminal_exit`
+ * and `_claude/rateLimit`). The values are producer-controlled hints: they
+ * can name a tool or carry a provider counter, but they never grant authority.
+ *
+ * Limits: depth 6, 64 keys or items per container, 4 KB per string and about
+ * 16 KB in total. Entries beyond a limit are dropped, never partially parsed.
+ * Returns undefined when nothing usable remains.
+ */
+export function boundedAcpMeta(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  // The budget is the serialized JSON size of the retained copy: every
+  // scalar at its escaped length, every bracket, separator and key. A value
+  // that does not fit is dropped whole, so the copy never exceeds the bound.
+  let budget = MAX_ACP_META_TOTAL_BYTES;
+  const charge = (bytes: number): boolean => {
+    if (bytes > budget) return false;
+    budget -= bytes;
+    return true;
+  };
+  const visit = (input: unknown, depth: number): unknown => {
+    if (input === null || typeof input === "boolean") {
+      return charge(String(input).length) ? input : undefined;
+    }
+    if (typeof input === "number") {
+      if (!Number.isFinite(input)) return undefined;
+      return charge(JSON.stringify(input).length) ? input : undefined;
+    }
+    if (typeof input === "string") {
+      const bounded = boundedAcpxLifecycleText(input, MAX_ACP_META_STRING_BYTES) ?? "";
+      return charge(Buffer.byteLength(JSON.stringify(bounded))) ? bounded : undefined;
+    }
+    if (depth >= MAX_ACP_META_DEPTH || typeof input !== "object") return undefined;
+    if (!charge(2)) return undefined;
+    if (Array.isArray(input)) {
+      const items: unknown[] = [];
+      const limit = Math.min(input.length, MAX_ACP_META_ENTRIES);
+      for (let index = 0; index < limit && budget > 0; index += 1) {
+        if (items.length > 0 && !charge(1)) break;
+        const next = visit(input[index], depth + 1);
+        if (next !== undefined) items.push(next);
+        else if (items.length > 0) budget += 1;
+      }
+      return items;
+    }
+    const output: Record<string, unknown> = {};
+    let retained = 0;
+    let inspected = 0;
+    // for...in stops early; Object.entries would materialize every key of a
+    // wide producer object before any limit applied.
+    for (const key in input as Record<string, unknown>) {
+      if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
+      if (retained >= MAX_ACP_META_ENTRIES || inspected >= MAX_ACP_META_ENTRIES * 4 || budget <= 0) break;
+      inspected += 1;
+      if (UNSAFE_ACP_META_KEYS.has(key) || Buffer.byteLength(key) > 160) continue;
+      const keyBytes = Buffer.byteLength(JSON.stringify(key)) + 1 + (retained > 0 ? 1 : 0);
+      if (!charge(keyBytes)) break;
+      const next = visit((input as Record<string, unknown>)[key], depth + 1);
+      if (next === undefined) {
+        budget += keyBytes;
+        continue;
+      }
+      output[key] = next;
+      retained += 1;
+    }
+    return output;
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const bounded = visit(value, 0) as Record<string, unknown> | undefined;
+  return bounded && Object.keys(bounded).length > 0 ? bounded : undefined;
+}
+
+/** Bound any forwarded `_meta` on a runtime event, whatever its type. */
+function withBoundedAcpMeta<T extends AcpRuntimeEventShape>(event: T): T {
+  if (!Object.prototype.hasOwnProperty.call(event, "_meta")) return event;
+  const { _meta: raw, ...rest } = event as T & { _meta?: unknown };
+  const meta = boundedAcpMeta(raw);
+  return (meta ? { ...rest, _meta: meta } : rest) as T;
+}
+
 /**
  * ACP tool updates are deltas: a later update may omit the title, kind, and
  * locations that were present on the opening event. ACPX represents a missing
@@ -291,7 +390,8 @@ export function createAcpxToolEventNormalizer<
   T extends AcpRuntimeEventShape,
 >(): (event: T) => T {
   const lifecycle = new Map<string, AcpxToolLifecycleIdentity>();
-  return (event) => {
+  return (input) => {
+    const event = withBoundedAcpMeta(input);
     if (event.type !== "tool_call" || !event.toolCallId) return event;
     const toolCallId = boundedAcpxLifecycleId(event.toolCallId);
     const boundedTitle = boundedAcpxLifecycleText(
@@ -621,6 +721,7 @@ function researchSources(
 export function canonicalProviderEventsFromCodex(
   method: string,
   paramsValue: unknown,
+  context: CanonicalProviderEventContext = {},
 ): CanonicalProviderEvent[] {
   const params = record(paramsValue);
   const item = record(params.item);
@@ -650,6 +751,43 @@ export function canonicalProviderEventsFromCodex(
       },
     }];
   }
+  if (method === "mcpServer/startupStatus/updated") {
+    // Only a failed start is user-facing: the agent then runs without that
+    // server's tools. starting/ready/cancelled stay in the raw run log.
+    if (params.status !== "failed") return [];
+    const serverName = [...text(params.name).trim()].slice(0, 160).join("") || "An";
+    const failureReason = text(params.failureReason);
+    // Codex wraps the reason in sentences that repeat what the notice already
+    // says: "MCP client for `github` failed to start: MCP startup failed: <reason>".
+    const error = redactCodexDiagnostic(text(params.error))
+      .trim()
+      .replace(/^MCP client for `[^`]*` failed to start:\s*/i, "")
+      .replace(/^MCP startup failed:\s*/i, "")
+      .trim();
+    const reason = failureReason === "reauthenticationRequired"
+      ? "needs re-authentication"
+      : error;
+    const noticeId = safeId(`mcp-startup:${serverName}`, "mcp-startup");
+    return [{
+      eventType: "provider.notice.recorded",
+      itemId: noticeId,
+      payload: {
+        schema: "paperclip.provider.notice.v1",
+        noticeId,
+        severity: "warning",
+        category: "mcp_server_startup_failed",
+        scope: "session",
+        recoverable: true,
+        userActionable: true,
+        summary: `${serverName} MCP server failed to start${reason ? `: ${reason}` : ""}`.slice(0, 4000),
+        details: [
+          { name: "server", value: serverName },
+          ...(reason ? [{ name: "reason", value: reason.slice(0, 4000) }] : []),
+          ...(failureReason ? [{ name: "failureReason", value: failureReason.slice(0, 160) }] : []),
+        ],
+      },
+    }];
+  }
   if (method === "turn/plan/updated") {
     const turnPlanId = safeId(text(params.turnId), "turn-plan");
     return [
@@ -673,6 +811,34 @@ export function canonicalProviderEventsFromCodex(
           item,
           completed ? canonicalStatus(item.status, "completed") : "running",
         ),
+        itemId,
+      },
+    ];
+  }
+  if ((method === "item/started" || completed) && type === "fileChange") {
+    // The workspace-change projection keeps the whole-turn view; the edit row
+    // carries this one patch so each change can be reviewed where it happened.
+    const fileChanges = toolFileChangesFromCodexChanges(item.changes, context.workingDirectory);
+    const status = completed ? canonicalStatus(item.status, "completed") : "running";
+    return [
+      {
+        eventType: completed ? "tool.execution.completed" : "tool.execution.started",
+        payload: {
+          schema: "paperclip.tool.execution.v1",
+          executionId: itemId,
+          transport: "builtin",
+          operation: "edit",
+          name: "apply_patch",
+          target: fileChanges?.[0]?.path ?? null,
+          namespace: null,
+          readOnly: false,
+          status,
+          durationMs: null,
+          exitCode: null,
+          progress: null,
+          ...boundedOutput(""),
+          ...(fileChanges ? { fileChanges } : {}),
+        },
         itemId,
       },
     ];
@@ -1139,6 +1305,7 @@ export function canonicalProviderEventsFromAcpxRuntimeEvent(
   event: AcpRuntimeEventShape,
   fallbackItemId: string,
   turnId?: string,
+  context: CanonicalProviderEventContext = {},
 ): CanonicalProviderEvent[] {
   const runtimeType = text(record(event).type);
   if (
@@ -1226,13 +1393,20 @@ export function canonicalProviderEventsFromAcpxRuntimeEvent(
     const mcp = acpxMcpToolIdentity(title);
     const name = mcp?.name ?? title;
     const operation = acpxToolOperation(event.kind, name);
+    // ACP `diff` content: Claude Edit/Write send old/new text at tool_use time
+    // and a hunk-exact replacement after the edit lands.
+    const fileChanges = toolFileChangesFromAcpContent(
+      event.content,
+      event.locations,
+      context.workingDirectory,
+    );
     const payload = {
       schema: "paperclip.tool.execution.v1",
       executionId: itemId,
       transport: mcp ? "mcp" : "builtin",
       operation,
       name: name || null,
-      target: safeAcpLocation(event.locations?.[0]),
+      target: safeAcpLocation(event.locations?.[0]) ?? fileChanges?.[0]?.path ?? null,
       namespace: mcp?.namespace ?? null,
       readOnly: ["read", "search", "list"].includes(operation),
       ...(Object.prototype.hasOwnProperty.call(event, "rawInput")
@@ -1246,6 +1420,7 @@ export function canonicalProviderEventsFromAcpxRuntimeEvent(
       progress:
         status === "running" ? text(event.text).slice(0, 4000) || null : null,
       ...boundedOutput(output),
+      ...(fileChanges ? { fileChanges } : {}),
     };
     const terminal = status !== "running";
     return [

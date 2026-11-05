@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { resolveGrokDisableWebSearch } from "../drivers/acpx/grok-web-search.js";
+import { toolFileChangesFromAcpContent, workspaceRootsFor, type ToolFileChange } from "../tool-file-changes.js";
 import { redactObservabilityDiagnostic } from "../drivers/agent-observability.js";
 import { resolveClaudeEffort } from "../drivers/acpx/claude-effort.js";
+import { acpxProviderFailure, acpxTerminalResult, type AcpxTerminalSessionFailure } from "../drivers/acpx/provider-failure.js";
+import { providerFailureFromError } from "../drivers/provider-failure.js";
 import { resolveGrokEffort } from "../drivers/acpx/grok-effort.js";
 import { parseProviderMode } from "../contracts/provider-mode.js";
 import { assertAcpxExecutionAdmission, parseAcpxCandidateStartupAdmission, type AcpxCandidateStartupAdmission } from "../drivers/acpx/candidate-admission.js";
@@ -27,6 +30,7 @@ import { acpxProfileClientCapabilities, bindAcpxExtensionTurn, validateAcpxRichE
 import type { PaperclipQuestionSet } from "../contracts/question-set.js";
 import { createAcpxToolEventNormalizer, createGrokMessageNormalizer } from "../provider-events.js";
 import { createPiMessageProjection, type PiProjectedMessageEvent } from "../drivers/acpx/pi-message-projection.js";
+import { createKimiMessageProjection, type KimiProjectedMessageEvent } from "../drivers/acpx/kimi-message-boundary.js";
 import { parseNativeRuntimeContext } from "../contracts/runtime-context.js";
 import {
   PRP_BLOCK_TOOL_NAME,
@@ -250,6 +254,8 @@ async function receiveLine(line: string): Promise<void> {
       ),
       message: safeMessage(normalized),
       retryable: normalizedRecord.retryable === true,
+      ...(request.command === "session.open" && initializedAgent
+        ? { providerFailure: providerFailureFromError(error) ?? acpxProviderFailure(error, initializedAgent, "startup", process.env) ?? undefined } : {}),
     });
   }
 }
@@ -421,6 +427,8 @@ async function dispatch(
     });
     activeCopilotEvidence = toolEvidence && "captureSemanticReceipt" in toolEvidence ? toolEvidence as CopilotToolEvidence : undefined;
     let usageBefore: unknown;
+    // ACPX reports a generic terminal error; the provider's typed reason arrives here first.
+    const sessionFailure: { value?: AcpxTerminalSessionFailure } = {};
     const timed = request.params.performance === true;
     const timingStart = receivedAt;
     let statusMs = 0;
@@ -437,12 +445,13 @@ async function dispatch(
           waitForInput(currentTurnId, providerRequest, context),
         onPermissionRequest: (providerRequest, context) =>
           waitForPermission(currentTurnId, activeAgent, providerRequest, context, toolEvidence),
+        onTerminalSessionFailure: (failure) => { sessionFailure.value = failure; },
       });
     } catch (error) {
       turnId = null;
       throw error;
     }
-    void pumpTurn(currentTurnId, runtimeTurn, activeHost, usageBefore, extensions.drain, activity, toolEvidence);
+    void pumpTurn(currentTurnId, runtimeTurn, activeHost, usageBefore, extensions.drain, activity, toolEvidence, sessionFailure);
     // Warm sessions may defer initialize until their first prompt. Publish only
     // the capabilities of that live initialized connection, never old disk state.
     const promptStart = timed ? performance.now() : 0;
@@ -659,6 +668,7 @@ async function pumpTurn(
   drainExtensions: () => Promise<void>,
   activity: AcpxActivityAdapter,
   toolEvidence?: AcpxToolEvidence,
+  sessionFailure: { value?: AcpxTerminalSessionFailure } = {},
 ): Promise<void> {
   let terminal: Record<string, unknown>;
   try {
@@ -667,7 +677,8 @@ async function pumpTurn(
     // the sidecar boundary, matching the in-process ACPX driver path.
     const normalizeToolEvent = createAcpxToolEventNormalizer<AcpRuntimeEvent>();
     const piMessages = initializedAgent === "pi" ? createPiMessageProjection<AcpRuntimeEvent>() : null;
-    const normalizeMessage = piMessages ? piMessages.normalize : initializedAgent === "grok"
+    const kimiMessages = initializedAgent === "kimi" ? createKimiMessageProjection<AcpRuntimeEvent>() : null;
+    const normalizeMessage = kimiMessages ? kimiMessages.normalize : piMessages ? piMessages.normalize : initializedAgent === "grok"
       ? createGrokMessageNormalizer<AcpRuntimeEvent>() : (event: AcpRuntimeEvent) => event;
     for await (const event of runtimeTurn.events) {
       toolEvidence?.tool(event);
@@ -680,7 +691,7 @@ async function pumpTurn(
       );
     }
     const result = await runtimeTurn.result;
-    if (result.status === "completed") piMessages?.settle();
+    if (result.status === "completed") { piMessages?.settle(); kimiMessages?.settle(); }
     await drainExtensions();
     try {
       const usageAfter = await readSidecarHostStatusWithin(activeHost);
@@ -710,7 +721,7 @@ async function pumpTurn(
       // not replace the provider's authoritative completed/cancelled result.
       diagnostic("acpx_terminal_usage_unavailable", safeMessage(error));
     }
-    terminal = boundedSidecarValue(result);
+    terminal = openParams ? acpxTerminalResult(result, openParams.agent, process.env, sessionFailure.value) : boundedSidecarValue(result);
   } catch (error) {
     terminal = {
       status: "failed",
@@ -718,6 +729,7 @@ async function pumpTurn(
         ...(error instanceof AcpxApprovalRequiredError || error instanceof AcpxProviderProcessLostError ? { code: error.code } : {}),
         message: safeMessage(error),
         retryable: false,
+        ...(openParams ? { providerFailure: acpxProviderFailure(error, openParams.agent, "turn", process.env, false, sessionFailure.value) ?? undefined } : {}),
       },
     };
   } finally {
@@ -1005,7 +1017,18 @@ type BoundedRuntimeToolEvent = AcpRuntimeEvent & {
   paperclipBoundedTool: true;
   inputUpdated: boolean;
   paperclipOutput: Record<string, unknown>;
+  paperclipFileChanges: ToolFileChange[] | null;
 };
+
+let cachedWorkspaceRoots: { directory: string; roots: string[] } | null = null;
+function sidecarWorkspaceRoots(): string[] {
+  const directory = openParams?.workingDirectory;
+  if (!directory) return [];
+  if (cachedWorkspaceRoots?.directory !== directory) {
+    cachedWorkspaceRoots = { directory, roots: workspaceRootsFor(directory) };
+  }
+  return cachedWorkspaceRoots.roots;
+}
 
 function boundRuntimeEventForNormalization(
   event: AcpRuntimeEvent,
@@ -1034,10 +1057,17 @@ function boundRuntimeEventForNormalization(
     inputUpdated: Object.prototype.hasOwnProperty.call(event, "rawInput") && event.rawInput !== undefined,
     paperclipBoundedTool: true,
     paperclipOutput: safeOutput(event.rawOutput),
+    // ACP `diff` content (Claude Edit/Write) as bounded workspace-relative
+    // patches; runner-core re-validates them before the canonical event.
+    paperclipFileChanges: toolFileChangesFromAcpContent(
+      event.content,
+      event.locations,
+      sidecarWorkspaceRoots(),
+    ),
   } as BoundedRuntimeToolEvent;
 }
 
-function sanitizeRuntimeEvent(event: PiProjectedMessageEvent<AcpRuntimeEvent>): Record<string, unknown> {
+function sanitizeRuntimeEvent(event: PiProjectedMessageEvent<AcpRuntimeEvent> & KimiProjectedMessageEvent<AcpRuntimeEvent>): Record<string, unknown> {
   const runtimeType = text(record(event).type);
   if (runtimeType === "plan") {
     return {
@@ -1053,6 +1083,8 @@ function sanitizeRuntimeEvent(event: PiProjectedMessageEvent<AcpRuntimeEvent>): 
       tag: event.tag ?? null,
       ...(event.piMessageBoundary ? { piMessageBoundary: event.piMessageBoundary } : {}),
       ...(event.piMessageHistory ? { piMessageHistory: true } : {}),
+      ...(event.assistantMessageBoundary ? { assistantMessageBoundary: event.assistantMessageBoundary } : {}),
+      ...(event.assistantMessageHistory ? { assistantMessageHistory: true } : {}),
       messageId:
         typeof event.messageId === "string" && event.messageId.length > 0
           ? stableProviderIdentity(event.messageId, "message")
@@ -1133,6 +1165,9 @@ function sanitizeRuntimeEvent(event: PiProjectedMessageEvent<AcpRuntimeEvent>): 
         ...(boundedTool.paperclipBoundedTool === true
           ? boundedTool.paperclipOutput
           : safeOutput(event.rawOutput)),
+        ...(boundedTool.paperclipBoundedTool === true && boundedTool.paperclipFileChanges
+          ? { fileChanges: boundedTool.paperclipFileChanges }
+          : {}),
       },
       128 * 1024,
       toolCallIdentity,
@@ -1190,6 +1225,7 @@ function safeUsage(cost: unknown, breakdown: unknown): Record<string, unknown> {
         ? null
         : {
             amount: safeNonNegativeNumber(nativeCost.amount),
+            ...(nativeCost.basis === "turn" ? { basis: "turn" } : {}),
             currency: safeText(text(nativeCost.currency)).slice(0, 16) || null,
           },
     breakdown:
@@ -1478,8 +1514,8 @@ function requireHost(
 }
 
 function requireQualifiedAgent(value: unknown, model?: string, candidateAdmission?: AcpxCandidateStartupAdmission): QualifiedAcpxAgent {
-  if (value !== "grok" && value !== "codex" && value !== "claude" && value !== "pi" && value !== "cursor" && value !== "copilot" && value !== "antigravity") {
-    throw new Error("ACPX agent must be claude, codex, grok, cursor, copilot, pi, or antigravity");
+  if (value !== "grok" && value !== "codex" && value !== "claude" && value !== "pi" && value !== "cursor" && value !== "copilot" && value !== "kimi" && value !== "antigravity") {
+    throw new Error("ACPX agent must be claude, codex, grok, cursor, copilot, kimi, pi, or antigravity");
   }
   if (candidateAdmission) assertAcpxExecutionAdmission(resolveQualifiedAcpxProfile(value, model ?? ""), candidateAdmission);
   else assertAcpxProfileReleased(value);

@@ -9,7 +9,7 @@ import {
   promises as fs,
 } from "node:fs";
 import os from "node:os";
-import { createWorkspaceManifest, WorkspaceManifestMap, workspacePaths, workspacePathMatcher, writeWorkspacePaths, isPathManifest, type WorkspacePaths } from "./workspace-manifest.js";
+import { assertWorkspaceManifestDiskSpace, createWorkspaceManifest, WorkspaceManifestMap, workspacePaths, workspacePathMatcher, writeWorkspacePaths, isPathManifest, type WorkspacePaths } from "./workspace-manifest.js";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
@@ -887,6 +887,12 @@ async function persistDurableSeedArchive(input: {
   if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
     throw new Error("workspace_durable_seed_root_invalid");
   }
+  const source = await fs.lstat(input.sourcePath);
+  if (source.isSymbolicLink() || !source.isFile()) {
+    throw new Error("workspace_durable_seed_invalid");
+  }
+  // A seed is a full archive copy; refuse it before it consumes the host reserve.
+  assertWorkspaceManifestDiskSpace(parent, source.size);
   const temporary = path.join(
     parent,
     `.${path.basename(input.targetPath)}.${randomUUID()}.tmp`,
@@ -1516,7 +1522,7 @@ export async function prepareSandboxManagedRuntime(input: {
   await withTempDir("paperclip-sandbox-sync-", async (tempDir) => {
     const cachedSeed = seedGeneration
       ? await runStepSpan("workspace.seed_lookup", () => readWorkspaceSeedGeneration(input.workspaceSeedCacheDirectory!, seedGeneration,
-        { companyDirectory: input.workspaceSeedCacheCompanyDirectory, privateCopyDirectory: tempDir })) : null;
+        { companyDirectory: input.workspaceSeedCacheCompanyDirectory, privateCopyDirectory: tempDir, runtimeSpan: runStepSpan })) : null;
     const replaySeed = workspaceInboundMode === "durable_seed" ? input.workspaceDurableSeed : cachedSeed;
     const preservedNames = new Set([
       ".paperclip-runtime",
@@ -1740,9 +1746,10 @@ export async function prepareSandboxManagedRuntime(input: {
               const gitArchivePath = gitSnapshot || repositories.length
                 ? (sharedSeed ? gitSeedTarPath : seed.gitArchivePath) : null;
               await runStepSpan("workspace.seed_publish", () => publishWorkspaceSeedGeneration(input.workspaceSeedCacheDirectory!, seedGeneration,
-                { ...seed, gitArchivePath }, {
+                { ...seed, gitArchivePath: gitSnapshot || repositories.length ? seed.gitArchivePath : null }, {
                   companyDirectory: input.workspaceSeedCacheCompanyDirectory,
                   scope: input.workspaceSeedCacheScope,
+                  ...(sharedSeed && gitArchivePath ? { cacheOnlyGitArchivePath: gitArchivePath } : {}),
                   runtimeSpan: runStepSpan,
                   verify: () => runStepSpan("seed.verify", async () => {
                     const verifiedRoot = path.join(tempDir, "verify-seed");

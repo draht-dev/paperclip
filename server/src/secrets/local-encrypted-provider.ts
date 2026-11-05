@@ -50,6 +50,11 @@ function decodeMasterKey(raw: string): Buffer | null {
   return null;
 }
 
+/** Check the configured key without reading, creating, or changing key files. */
+export function isValidLocalEncryptedMasterKey(raw: string): boolean {
+  return decodeMasterKey(raw) !== null;
+}
+
 function loadOrCreateMasterKey(allowCreate = true, env: LocalEncryptedKeyEnv = process.env): Buffer {
   const envKeyRaw = env.PAPERCLIP_SECRETS_MASTER_KEY;
   if (envKeyRaw && envKeyRaw.trim().length > 0) {
@@ -94,8 +99,8 @@ function loadOrCreateMasterKey(allowCreate = true, env: LocalEncryptedKeyEnv = p
 }
 
 /** Derive a purpose-specific instance secret without exposing or reusing the vault key. */
-export function deriveLocalEncryptedInstanceSecret(purpose: string, env: LocalEncryptedKeyEnv = process.env): string {
-  return Buffer.from(hkdfSync("sha256", loadOrCreateMasterKey(true, env), Buffer.alloc(0),
+export function deriveLocalEncryptedInstanceSecret(purpose: string, env: LocalEncryptedKeyEnv = process.env, options: { allowCreate?: boolean } = {}): string {
+  return Buffer.from(hkdfSync("sha256", loadOrCreateMasterKey(options.allowCreate ?? true, env), Buffer.alloc(0),
     `paperclip:instance-secret:v1\0${purpose}`, 32)).toString("base64url");
 }
 
@@ -194,8 +199,10 @@ async function inspectLocalEncryptedHealth(): Promise<SecretProviderHealthCheck>
     };
   }
 
+  // Windows has no POSIX permission bits: stat() reports 0o666 for any writable
+  // file and chmod cannot restrict it, so this check would always warn there.
   const warnings =
-    mode !== null && (mode & 0o077) !== 0
+    process.platform !== "win32" && mode !== null && (mode & 0o077) !== 0
       ? [`Secrets key file permissions are ${mode.toString(8)}; run chmod 600 ${keyPath}`]
       : [];
   return {

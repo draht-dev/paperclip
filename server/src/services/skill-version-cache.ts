@@ -13,6 +13,7 @@ import type { CompanySkillVersionFileInventoryEntry } from "@paperclipai/shared"
 import { noteSkillVersionCacheChange } from "./skill-version-retention-notifications.js";
 import { parseNativeExecutionInput } from "../vendor/paperclip-runner/index.js";
 import { beginRunPhase } from "./execution-preparation-timing.js";
+import { withWorkspaceLockKeepalive } from "./native-runtime/native-workspace-lock-keepalive.js";
 
 export const SKILL_VERSION_CACHE_IDLE_MS = 60 * 60 * 1000;
 const locks = new AsyncLocalStorage<Array<{ db: Db; companyId: string }>>();
@@ -32,7 +33,13 @@ export async function withSkillVersionCacheLock<T>(db: Db, companyId: string, ac
       if (!rows[0]?.acquired) throw new SkillCacheBusy();
     } else await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
     acquired();
-    return locks.run([...held, { db, companyId }], action);
+    // Preparation can outlast idle_in_transaction_session_timeout while this
+    // lock-only transaction waits; losing the session would release the lock.
+    const settings = await tx.execute<{ idle_timeout_ms: string }>(
+      sql`select setting::bigint as idle_timeout_ms from pg_settings where name = 'idle_in_transaction_session_timeout'`,
+    );
+    return withWorkspaceLockKeepalive(tx, Number(settings[0]?.idle_timeout_ms),
+      () => locks.run([...held, { db, companyId }], action));
   })).catch(error => {
     acquired(true);
     throw error;
@@ -144,9 +151,7 @@ export async function protectedVersions(db: Db, companyId: string): Promise<{ ve
           || input.binding.runId !== id || input.binding.agentId !== agentId
           || input.binding.issueId !== nativeIssueId) return unknown();
         for (const skill of input.runtimeContext.skills) {
-          // Unversioned skills have their own captured asset bundle; they do
-          // not reference a directory under __versions__.
-          if (skill.versionId === null) continue;
+          if (skill.versionId === null) return unknown();
           if (!uuid.test(skill.versionId)) return unknown();
           add(skill.versionId);
         }
@@ -209,4 +214,3 @@ export async function allocatedBytes(directory: string, shouldContinue: () => bo
   }
   return bytes;
 }
-

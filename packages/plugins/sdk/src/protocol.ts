@@ -618,6 +618,12 @@ export interface PluginEnvironmentProbeResult {
   metadata?: Record<string, unknown>;
 }
 
+export interface PluginEnvironmentWorkspaceAllocationFiles {
+  providerLeaseId: string;
+  remoteCwd: string;
+  files: Array<{ relativePath: string; sha256: string }>;
+}
+
 export interface PluginEnvironmentLease {
   providerLeaseId: string | null;
   metadata?: Record<string, unknown>;
@@ -641,6 +647,7 @@ export interface PluginEnvironmentRunnerIngressEndpointParams
 
 export interface PluginEnvironmentAcquireLeaseParams extends PluginEnvironmentDriverBaseParams {
   runId: string;
+  creationOperationId?: string;
   /** Explicit platform probes may request a provider-owned immutable snapshot
    * identity. Supporting providers create by that ID and return snapshotIdentity
    * in lease metadata. Older providers may omit it; the host then cannot qualify
@@ -676,6 +683,7 @@ export interface PluginEnvironmentResumeLeaseParams extends PluginEnvironmentDri
   runId?: string;
   providerLeaseId: string;
   leaseMetadata?: Record<string, unknown>;
+  requestedCwd?: string;
 }
 
 export interface PluginEnvironmentReleaseLeaseParams extends PluginEnvironmentDriverBaseParams {
@@ -701,11 +709,14 @@ export interface PluginEnvironmentDestroyLeaseParams extends PluginEnvironmentRe
 /** Observe this exact allocation without starting, stopping or deleting it.
  * Missing resources must be distinguished from permission/transport failures. */
 export interface PluginEnvironmentInspectLeaseParams extends PluginEnvironmentDriverBaseParams {
+  creationOperation?: { id: string; runId: string };
   providerLeaseId: string;
   leaseMetadata?: Record<string, unknown>;
 }
 
 export interface PluginEnvironmentLeaseObservation {
+  creationLease?: PluginEnvironmentLease;
+  creationCleanup?: import("./environment-creation-cleanup.js").PluginEnvironmentCreationCleanup;
   providerLeaseId: string;
   state: "active" | "stopped" | "destroyed" | "unknown";
 }

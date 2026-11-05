@@ -6,6 +6,7 @@ import {
   canonicalProviderEventsFromAcpxRuntimeEvent,
   canonicalProviderEventsFromCodex,
   canonicalProviderEventsFromOpenCodePart,
+  boundedAcpMeta,
   createAcpxToolEventNormalizer,
   createGrokMessageNormalizer,
   providerFamilyCapabilities,
@@ -90,6 +91,48 @@ describe("provider-neutral events", () => {
         expect(event.payload.userActionable).toBe(false);
         expect(validatePrpEvent(envelope(event)).ok).toBe(true);
       }
+    }
+  });
+
+  it("maps a failed Codex MCP server start to a user-facing notice", () => {
+    const [event] = canonicalProviderEventsFromCodex("mcpServer/startupStatus/updated", {
+      threadId: null,
+      name: "paperclip",
+      status: "failed",
+      error: "MCP client for `paperclip` failed to start: program not found: paperclip-mcp",
+      failureReason: null,
+    });
+    expect(event).toMatchObject({
+      eventType: "provider.notice.recorded",
+      itemId: "mcp-startup:paperclip",
+      payload: {
+        severity: "warning",
+        category: "mcp_server_startup_failed",
+        scope: "session",
+        userActionable: true,
+        summary: "paperclip MCP server failed to start: program not found: paperclip-mcp",
+        details: [
+          { name: "server", value: "paperclip" },
+          { name: "reason", value: "program not found: paperclip-mcp" },
+        ],
+      },
+    });
+    expect(validatePrpEvent(envelope(event)).ok).toBe(true);
+
+    const [reauth] = canonicalProviderEventsFromCodex("mcpServer/startupStatus/updated", {
+      name: "linear", status: "failed", error: null, failureReason: "reauthenticationRequired",
+    });
+    expect(reauth.payload.summary).toBe("linear MCP server failed to start: needs re-authentication");
+    // Codex 0.160's own wording, observed on a live run.
+    const [live] = canonicalProviderEventsFromCodex("mcpServer/startupStatus/updated", {
+      name: "github", status: "failed",
+      error: "MCP client for `github` failed to start: MCP startup failed: No such file or directory (os error 2)",
+    });
+    expect(live.payload.summary).toBe("github MCP server failed to start: No such file or directory (os error 2)");
+    expect(validatePrpEvent(envelope(reauth)).ok).toBe(true);
+
+    for (const status of ["starting", "ready", "cancelled"]) {
+      expect(canonicalProviderEventsFromCodex("mcpServer/startupStatus/updated", { name: "paperclip", status })).toEqual([]);
     }
   });
 
@@ -555,6 +598,84 @@ describe("provider-neutral events", () => {
     });
   });
 
+  it("forwards ACP _meta as a bounded JSON-safe copy on every runtime event", () => {
+    const normalize = createAcpxToolEventNormalizer();
+    const tool = normalize({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "tool-meta",
+      title: "Terminal",
+      status: "pending",
+      _meta: {
+        claudeCode: { toolName: "Bash", parentToolUseId: "toolu_parent" },
+        terminal_exit: { exit_code: 2, signal: null },
+        ["__proto__"]: { polluted: true },
+      },
+    } as never);
+    expect(tool._meta).toEqual({
+      claudeCode: { toolName: "Bash", parentToolUseId: "toolu_parent" },
+      terminal_exit: { exit_code: 2, signal: null },
+    });
+    const status = normalize({
+      type: "status",
+      tag: "usage_update",
+      text: "usage updated",
+      _meta: { "_claude/rateLimit": { status: "allowed", utilization: 0.78 } },
+    } as never);
+    expect(status._meta).toEqual({
+      "_claude/rateLimit": { status: "allowed", utilization: 0.78 },
+    });
+    expect(
+      normalize({ type: "status", text: "x", _meta: "not an object" } as never),
+    ).not.toHaveProperty("_meta");
+  });
+
+  it("bounds ACP _meta depth, breadth, string size and total size", () => {
+    let deep: Record<string, unknown> = { leaf: true };
+    for (let index = 0; index < 10; index += 1) deep = { next: deep };
+    const wide = Object.fromEntries(
+      Array.from({ length: 100 }, (_, index) => [`k${index}`, index]),
+    );
+    const bounded = boundedAcpMeta({
+      deep,
+      wide,
+      long: "x".repeat(10_000),
+      big: Array.from({ length: 64 }, () => "y".repeat(3_000)),
+      notFinite: Number.POSITIVE_INFINITY,
+      fn: () => undefined,
+    })!;
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(16_000);
+    expect(Object.keys(bounded.wide as object)).toHaveLength(64);
+    expect((bounded.long as string).length).toBe(4_000);
+    expect(bounded).not.toHaveProperty("notFinite");
+    expect(bounded).not.toHaveProperty("fn");
+    expect(JSON.stringify(bounded.deep)).not.toContain("leaf");
+    expect(boundedAcpMeta([1, 2])).toBeUndefined();
+    expect(boundedAcpMeta({})).toBeUndefined();
+  });
+
+  it("charges every retained container, separator and escaped byte against the ACP _meta budget", () => {
+    let tree: unknown = [];
+    for (let level = 0; level < 3; level += 1) tree = Array.from({ length: 64 }, () => tree);
+    const nested = boundedAcpMeta({ a: tree })!;
+    expect(Buffer.byteLength(JSON.stringify(nested))).toBeLessThanOrEqual(16_000);
+    const escaped = boundedAcpMeta({ nulls: "\u0000".repeat(4_000), ok: "kept?" })!;
+    expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThanOrEqual(16_000);
+    expect(escaped).not.toHaveProperty("nulls");
+    expect(escaped.ok).toBe("kept?");
+  });
+
+  it("inspects a bounded number of keys on a very wide ACP _meta object", () => {
+    let reads = 0;
+    const wide = new Proxy(
+      Object.fromEntries(Array.from({ length: 10_000 }, (_, index) => [`__proto__x${index}`.replace("__proto__x", "k"), index])),
+      { get(target, key, receiver) { reads += 1; return Reflect.get(target, key, receiver); } },
+    );
+    const bounded = boundedAcpMeta({ wide })!;
+    expect(Object.keys(bounded.wide as object)).toHaveLength(64);
+    expect(reads).toBeLessThanOrEqual(64);
+  });
+
   it("preserves ACPX identity across title-less progress and completion updates", () => {
     const normalize = createAcpxToolEventNormalizer();
     const started = normalize({
@@ -907,5 +1028,61 @@ describe("Grok output message boundaries", () => {
     expect(normalize({ type: "text_delta", messageId: "native-id", text: " there" }).messageId).toBe("native-id");
     const reasoning = { type: "text_delta", tag: "agent_thought_chunk", text: "private" };
     expect(normalize(reasoning)).toBe(reasoning);
+  });
+});
+
+describe("edit file changes", () => {
+  it("turns a Codex fileChange item into a schema-valid edit row with its patch", () => {
+    const [started] = canonicalProviderEventsFromCodex(
+      "item/started",
+      {
+        item: {
+          id: "call-1",
+          type: "fileChange",
+          status: "inProgress",
+          changes: [
+            { path: "/work/repo/src/a.js", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-a\n+b\n" },
+            { path: "src/new.js", kind: { type: "add" }, diff: "x\ny\n" },
+          ],
+        },
+      },
+      { workingDirectory: "/work/repo" },
+    );
+    expect(started).toMatchObject({
+      eventType: "tool.execution.started",
+      payload: {
+        operation: "edit",
+        name: "apply_patch",
+        target: "src/a.js",
+        fileChanges: [
+          { path: "src/a.js", operation: "modify", additions: 1, deletions: 1 },
+          { path: "src/new.js", operation: "create", additions: 2, deletions: 0, diff: "@@ -0,0 +1,2 @@\n+x\n+y\n" },
+        ],
+      },
+    });
+    expect(validatePrpEvent(envelope(started!)).ok).toBe(true);
+  });
+
+  it("maps Claude ACP diff content to fileChanges and names the edited file", () => {
+    const [event] = canonicalProviderEventsFromAcpxRuntimeEvent(
+      {
+        type: "tool_call",
+        tag: "tool_call_update",
+        toolCallId: "tool-1",
+        title: "Edit price.js",
+        kind: "edit",
+        status: "completed",
+        locations: [{ path: "/work/repo/price.js", line: 3 }],
+        content: [{ type: "diff", path: "/work/repo/price.js", oldText: "a\nb", newText: "a\nc" }],
+      },
+      "fallback",
+      "turn-1",
+      { workingDirectory: ["/work/repo"] },
+    );
+    expect(event?.payload).toMatchObject({
+      target: "price.js",
+      fileChanges: [{ path: "price.js", operation: "modify", additions: 1, deletions: 1, diff: "@@ -3,2 +3,2 @@\n a\n-b\n+c\n" }],
+    });
+    expect(validatePrpEvent(envelope(event!)).ok).toBe(true);
   });
 });

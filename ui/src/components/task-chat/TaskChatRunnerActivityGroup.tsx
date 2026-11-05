@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { completedActivitySummary } from "./completed-activity-summary";
 import {
   Brain,
@@ -18,16 +18,49 @@ import {
   protocolActivityPresentation,
 } from "./task-chat-activity-presentation";
 import {
+  ResearchSourceStrip,
   TaskChatProtocolActivityDetails,
+  WaitCountdown,
   hasTaskChatProtocolActivityDetails,
+  verificationOutcome,
+  verificationTone,
 } from "./TaskChatProtocolActivityRow";
 import { TaskChatUsageReadout } from "./TaskChatUsageReadout";
-import { toolActivityPresentation } from "./tool-taxonomy";
+import { TaskChatReasoningSummary } from "./TaskChatReasoningSummary";
+import { latestReasoningHeadline } from "./reasoning-summary";
+import { toolActivityPresentation, type ToolIcon } from "./tool-taxonomy";
 import { useTaskChatShimmer } from "./TaskChatShimmer";
+import { TaskChatDiffCounts, TaskChatDiffView } from "./TaskChatDiffView";
 
 type Activity = TaskChatActivityPhaseItem["items"][number];
 
-function presentation(item: Activity, active: boolean) {
+interface ActivityRowPresentation {
+  icon: ToolIcon;
+  label: string;
+  target?: string;
+  mono: boolean;
+  running: boolean;
+  /** Colors the leading icon, e.g. green or red for a verification check. */
+  iconClassName?: string;
+  /** Short plain-text outcome after the target, e.g. "6 tests passed". */
+  trailing?: ReactNode;
+}
+
+function providerTrailing(item: Extract<Activity, { kind: "protocol" }>): Pick<ActivityRowPresentation, "iconClassName" | "trailing"> {
+  if (item.surface !== "provider_activity") return {};
+  if (item.family === "verification") {
+    return {
+      iconClassName: verificationTone(item),
+      trailing: verificationOutcome(item),
+    };
+  }
+  if (item.family === "wait" && item.status === "running") {
+    return { trailing: <WaitCountdown item={item} /> };
+  }
+  return {};
+}
+
+function presentation(item: Activity, active: boolean): ActivityRowPresentation | null {
   if (item.kind === "tool") {
     const tool = toolActivityPresentation({
       name: item.rawName ?? item.name,
@@ -55,10 +88,12 @@ function presentation(item: Activity, active: boolean) {
     return {
       icon: Brain,
       label: running ? "Thinking" : "Thought",
-      target: item.lines
-        .filter((line) => line.trim())
-        .at(-1)
-        ?.trim(),
+      target:
+        latestReasoningHeadline(item.lines.join("\n")) ??
+        item.lines
+          .filter((line) => line.trim())
+          .at(-1)
+          ?.trim(),
       mono: false,
       running,
     };
@@ -72,6 +107,7 @@ function presentation(item: Activity, active: boolean) {
       target: protocol.detail,
       mono: true,
       running: active && protocolActivityIsRunning(item),
+      ...providerTrailing(item),
     };
   }
   if (item.kind === "marker")
@@ -130,7 +166,7 @@ function ActivityContent({
         className="flex size-5 shrink-0 items-center justify-center"
         data-activity-icon
       >
-        <Icon className="size-3.5" aria-hidden="true" />
+        <Icon className={cn("size-3.5", row.iconClassName)} aria-hidden="true" />
       </span>
       <span data-conversation-tool-running={row.running && shimmer && (item.kind === "tool" || (item.kind === "protocol" && item.surface === "provider_activity" && item.family === "tool_execution")) ? "true" : undefined} className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden whitespace-nowrap">
         <span
@@ -153,7 +189,19 @@ function ActivityContent({
             {row.target}
           </span>
         ) : null}
+        {row.trailing ? (
+          <span className="min-w-0 truncate text-xs text-muted-foreground" data-testid="task-chat-activity-trailing">
+            {row.trailing}
+          </span>
+        ) : null}
       </span>
+      {item.kind === "tool" && item.diff && (item.diff.added > 0 || item.diff.removed > 0) ? (
+        <TaskChatDiffCounts
+          added={item.diff.added}
+          removed={item.diff.removed}
+          className="text-xs"
+        />
+      ) : null}
     </span>
   );
 }
@@ -212,7 +260,7 @@ function RollingActivity({
 
 function ActivityDetails({ item }: { item: Activity }) {
   if (item.kind === "thinking")
-    return <div data-conversation-text="progress"><MarkdownBody softBreaks>{item.lines.join("\n")}</MarkdownBody></div>;
+    return <TaskChatReasoningSummary text={item.lines.join("\n")} streaming={Boolean(item.streaming)} />;
   if (item.kind === "usage") return <TaskChatUsageReadout item={item} />;
   if (item.kind === "protocol")
     return <TaskChatProtocolActivityDetails item={item} neutral />;
@@ -221,6 +269,10 @@ function ActivityDetails({ item }: { item: Activity }) {
       <p className="whitespace-pre-wrap break-words">
         {item.detail ?? item.label}
       </p>
+    );
+  if (item.diff?.lines?.length)
+    return (
+      <TaskChatDiffView lines={item.diff.lines} truncated={item.diff.truncated} />
     );
   return (
     <>
@@ -294,6 +346,9 @@ function ExpandedActivity({
           {content}
         </div>
       )}
+      {!open && item.kind === "protocol" && item.surface === "provider_activity" && item.family === "research" && item.status !== "running" ? (
+        <ResearchSourceStrip item={item} />
+      ) : null}
       {expandable && open ? (
         <div
           id={detailId}
@@ -327,6 +382,13 @@ export function TaskChatRunnerActivityGroup({
   const summary = completedActivitySummary(activities);
   const SummaryIcon = summary.icon;
   const countLabel = `${activities.length} ${activities.length === 1 ? "activity" : "activities"}`;
+  const editTotals = activities.reduce(
+    (sum, activity) =>
+      activity.kind === "tool" && activity.diff
+        ? { added: sum.added + activity.diff.added, removed: sum.removed + activity.diff.removed }
+        : sum,
+    { added: 0, removed: 0 },
+  );
   return (
     <section
       className="flex min-w-0 flex-col gap-2"
@@ -379,6 +441,13 @@ export function TaskChatRunnerActivityGroup({
               <RollingActivity item={latest} active={item.active} />
             )}
             <span className="flex shrink-0 items-center gap-1 text-xs">
+              {!item.active && (editTotals.added > 0 || editTotals.removed > 0) ? (
+                <TaskChatDiffCounts
+                  added={editTotals.added}
+                  removed={editTotals.removed}
+                  className="mr-1"
+                />
+              ) : null}
               {expanded ? countLabel : item.active ? activities.length : null}
               <ChevronRight
                 className={cn("size-3.5", expanded && "rotate-90")}

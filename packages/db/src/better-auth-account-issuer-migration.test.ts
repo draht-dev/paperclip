@@ -6,7 +6,7 @@
  * it — a backfill narrowed to one provider fails here.
  *
  * The migration test below exercises 0230 in isolation (historical upgrade
- * path); 0417 later relaxes the column again for Better Auth 1.7.3+.
+ * path); 0432 later relaxes the column again for Better Auth 1.7.3+.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -45,7 +45,7 @@ async function migrationHash() {
 
 describe("account issuer schema", () => {
   // Better Auth 1.7.3+ no longer writes `issuer` and keys accounts by
-  // `(providerId, accountId)` again, so 0417 relaxes the column to nullable
+  // `(providerId, accountId)` again, so 0432 relaxes the column to nullable
   // and drops the `(issuer, accountId)` unique index that 0230 added.
   it("keeps issuer as a nullable legacy column without the unique index", () => {
     const config = getTableConfig(authAccounts);

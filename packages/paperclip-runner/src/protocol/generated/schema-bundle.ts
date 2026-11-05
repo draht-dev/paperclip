@@ -1226,7 +1226,8 @@ export const providerDescriptorSchema = {
         "acpx",
         "openai_dot",
         "grok_bot",
-        "muse"
+        "muse",
+        "cursor_cloud"
       ]
     },
     "driver": {
@@ -1238,7 +1239,8 @@ export const providerDescriptorSchema = {
         "acpx_runtime",
         "openai_dot_mcp",
         "grok_bot_mcp",
-        "muse_external"
+        "muse_external",
+        "cursor_cloud_api"
       ]
     },
     "model": {
@@ -1532,6 +1534,19 @@ export const providerDescriptorSchema = {
             },
             "executionKind": {
               "const": "remote_service"
+            }
+          }
+        },
+        {
+          "properties": {
+            "provider": {
+              "const": "cursor_cloud"
+            },
+            "driver": {
+              "const": "cursor_cloud_api"
+            },
+            "executionKind": {
+              "const": "local_process"
             }
           }
         }
@@ -2070,6 +2085,61 @@ export const providerEventSchema = {
             "null"
           ],
           "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "fileChanges": {
+          "description": "Files changed by this one edit call, each with a bounded patch. Paths are workspace-relative.",
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "operation",
+              "previousPath",
+              "additions",
+              "deletions",
+              "diff",
+              "diffTruncated"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+              },
+              "operation": {
+                "enum": [
+                  "create",
+                  "modify",
+                  "delete",
+                  "rename"
+                ]
+              },
+              "previousPath": {
+                "$ref": "#/$defs/safePath"
+              },
+              "additions": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deletions": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "diff": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 32768
+              },
+              "diffTruncated": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false
@@ -2917,6 +2987,10 @@ export const workspaceDiffSchema = {
               "null"
             ],
             "maxLength": 262144
+          },
+          "diffTruncated": {
+            "description": "The producer shortened or omitted this file's patch; additions and deletions still cover all of it.",
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -3384,6 +3458,75 @@ export const usageSchema = {
     },
     "runDeltaAvailable": {
       "type": "boolean"
+    },
+    "runDeltaBasis": {
+      "const": "run"
+    },
+    "reconciliation": {
+      "type": "object",
+      "required": [
+        "reason",
+        "receivedTurnId",
+        "cumulative",
+        "priorOrigin"
+      ],
+      "properties": {
+        "reason": {
+          "const": "accounting_reconciliation_required"
+        },
+        "receivedTurnId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 240
+        },
+        "cumulative": {
+          "$ref": "#/$defs/measurement"
+        },
+        "priorOrigin": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "runnerInstanceId",
+            "runId",
+            "normalizedSessionId",
+            "turnId",
+            "itemId"
+          ],
+          "properties": {
+            "runnerInstanceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "runId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "normalizedSessionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "turnId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "itemId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     },
     "runDelta": {
       "$ref": "#/$defs/measurement"

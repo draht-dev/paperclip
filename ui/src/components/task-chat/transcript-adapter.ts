@@ -6,6 +6,7 @@
  * only showing a response after the turn settles.
  */
 import type { TranscriptEntry } from "@/adapters";
+import { turnChangesFromEditRows } from "./turn-file-changes";
 import type {
   TaskChatDiff,
   TaskChatActivityPhaseItem,
@@ -128,9 +129,10 @@ export function flattenSelfTalk(text: string): string {
     .trim();
 }
 
-function diffKind(changeType: string): "add" | "remove" | "context" {
+function diffKind(changeType: string): "add" | "remove" | "context" | "hunk" {
   if (changeType === "add") return "add";
   if (changeType === "remove") return "remove";
+  if (changeType === "hunk") return "hunk";
   return "context";
 }
 
@@ -317,6 +319,7 @@ const PROVIDER_DETAIL_KEYS: Record<
   safety: ["status", "decision", "targetExecutionId", "summary"],
   terminal: ["origin", "inputClass", "byteCount"],
   wait: ["reason", "status", "plannedDurationMs", "elapsedDurationMs"],
+  verification: ["status", "detail", "reasonCode"],
   provider_notice: [
     "severity",
     "category",
@@ -377,7 +380,8 @@ function providerActivityItem(
       label: titleCaseKey(key),
       value: clip(
         value,
-        entry.family === "provider_notice" && (key === "summary" || key === "message")
+        (entry.family === "provider_notice" && (key === "summary" || key === "message")) ||
+          (entry.family === "verification" && key === "detail")
           ? 4000
           : key === "message" || key === "summary" || key === "reason" ? 320 : 160,
       ),
@@ -404,7 +408,8 @@ function providerActivityItem(
             const status: TaskChatProtocolStep["status"] =
               rawStatus === "in_progress" ||
               rawStatus === "completed" ||
-              rawStatus === "blocked"
+              rawStatus === "blocked" ||
+              rawStatus === "failed"
                 ? rawStatus
                 : "pending";
             return {
@@ -483,6 +488,7 @@ function providerActivityItem(
     output: rawOutput ? rawOutput.slice(0, PROTOCOL_OUTPUT_MAX) : undefined,
     outputTruncated,
     transcriptIndex: index,
+    startedAt: entry.ts,
   };
 }
 
@@ -512,7 +518,7 @@ function mergeProviderActivityItem(
     previous.family !== "tool_execution" ||
     incoming.family !== "tool_execution"
   ) {
-    return { ...incoming, id: previous.id };
+    return { ...incoming, id: previous.id, startedAt: previous.startedAt ?? incoming.startedAt };
   }
   const details = new Map(
     previous.details.map((detail) => [detail.label, detail]),
@@ -546,6 +552,7 @@ function mergeProviderActivityItem(
   return {
     ...incoming,
     id: previous.id,
+    startedAt: previous.startedAt ?? incoming.startedAt,
     summary: meaningfulProviderToolSummary(incoming.summary)
       ? incoming.summary
       : previous.summary,
@@ -827,16 +834,39 @@ export function transcriptToTaskChatItems(
         break;
       }
       case "diff": {
+        // Diff lines addressed to a tool call attach to that row; legacy
+        // unaddressed lines attach to the most recent tool.
+        const addressedIndex = entry.toolUseId ? toolIndexById.get(entry.toolUseId) : undefined;
+        const targetIndex = addressedIndex ?? lastToolIndex;
+        const target =
+          targetIndex >= 0 && items[targetIndex]?.kind === "tool"
+            ? (items[targetIndex] as TaskChatToolItem)
+            : null;
         if (entry.changeType === "file_header") {
-          if (lastToolIndex >= 0 && items[lastToolIndex].kind === "tool") {
-            const tool = items[lastToolIndex] as TaskChatToolItem;
-            tool.diff = tool.diff ?? {
-              path: entry.text,
-              added: 0,
-              removed: 0,
-              lines: [],
-            };
-            tool.diff.path = entry.text;
+          if (target) {
+            if (target.diff?.lines?.length || target.diff?.files?.length) {
+              target.diff.lines = target.diff.lines ?? [];
+              target.diff.lines.push({ kind: "file", text: entry.text });
+            } else {
+              target.diff = target.diff ?? { added: 0, removed: 0, lines: [] };
+              target.diff.path = entry.text;
+            }
+            if (entry.additions != null && entry.deletions != null) {
+              const diff = target.diff!;
+              diff.files = diff.files ?? [];
+              diff.files.push({ path: entry.text, additions: entry.additions, deletions: entry.deletions, truncated: false });
+              diff.added = diff.files.reduce((sum, file) => sum + file.additions, 0);
+              diff.removed = diff.files.reduce((sum, file) => sum + file.deletions, 0);
+            }
+          }
+          resetInline();
+          break;
+        }
+        if (entry.changeType === "truncation") {
+          if (target?.diff) {
+            target.diff.truncated = true;
+            const file = target.diff.files?.at(-1);
+            if (file) file.truncated = true;
           }
           resetInline();
           break;
@@ -845,18 +875,20 @@ export function transcriptToTaskChatItems(
           kind: diffKind(entry.changeType),
           text: entry.text ?? "",
         };
-        if (lastToolIndex >= 0 && items[lastToolIndex].kind === "tool") {
-          const tool = items[lastToolIndex] as TaskChatToolItem;
-          const diff: TaskChatDiff = tool.diff ?? {
+        if (target) {
+          const diff: TaskChatDiff = target.diff ?? {
             added: 0,
             removed: 0,
             lines: [],
           };
           diff.lines = diff.lines ?? [];
           diff.lines.push(line);
-          if (line.kind === "add") diff.added += 1;
-          if (line.kind === "remove") diff.removed += 1;
-          tool.diff = diff;
+          // Producer counts cover the whole patch; count lines only without them.
+          if (!diff.files?.length) {
+            if (line.kind === "add") diff.added += 1;
+            if (line.kind === "remove") diff.removed += 1;
+          }
+          target.diff = diff;
         } else {
           items.push({
             id: `${runId}:diff:${i}`,
@@ -908,13 +940,12 @@ export function transcriptToTaskChatItems(
           revision: entry.revision,
           source: entry.source,
           complete: entry.complete,
-          files: entry.files.map((file) => ({
-            ...file,
-            diff:
-              file.diff == null
-                ? null
-                : file.diff.slice(0, PROTOCOL_OUTPUT_MAX),
-          })),
+          files: entry.files.map((file) => {
+            if (file.diff == null || file.diff.length <= PROTOCOL_OUTPUT_MAX) return { ...file };
+            // Keep whole lines so the preview still parses as a patch.
+            const cut = file.diff.lastIndexOf("\n", PROTOCOL_OUTPUT_MAX);
+            return { ...file, diff: file.diff.slice(0, cut > 0 ? cut + 1 : PROTOCOL_OUTPUT_MAX), diffTruncated: true };
+          }),
           totals: entry.totals,
           patchArtifactRef: entry.patchArtifactRef,
         };
@@ -1102,8 +1133,24 @@ export function transcriptToTaskChatItems(
         item.status === "pending"
       ) {
         item.status = "cancelled";
+      } else if (item.kind === "protocol" && item.surface === "workspace_change") {
+        // A harness-reported change set is final once its run has ended.
+        item.complete = true;
       }
     }
+  }
+
+  // Every turn that edited files ends with its changed files, just before its
+  // final answer. A harness that reports only per-edit patches gets the card
+  // assembled from its edit rows.
+  const changeIndex = items.findIndex((item) => item.kind === "protocol" && item.surface === "workspace_change");
+  const changes = changeIndex >= 0
+    ? items.splice(changeIndex, 1)[0]
+    : turnChangesFromEditRows(items, runId ?? "run", !running);
+  if (changes) {
+    const last = items.at(-1);
+    const beforeFinal = last?.kind === "message" && last.channel === "final";
+    items.splice(beforeFinal ? items.length - 1 : items.length, 0, changes);
   }
 
   return items;
@@ -1991,6 +2038,18 @@ export interface SettledTurnMergeMeta {
  * the merged turn keeps the FIRST run's id (stable across re-renders), and
  * animateFold survives if any merged run was seen live.
  */
+/** One banner line per server; the later run's report wins. */
+function mergeMcpStartupFailures(
+  first: TaskChatTurnItem["mcpStartupFailures"],
+  second: TaskChatTurnItem["mcpStartupFailures"],
+): TaskChatTurnItem["mcpStartupFailures"] {
+  if (!first?.length) return second;
+  if (!second?.length) return first;
+  const byServer = new Map(first.map((failure) => [failure.serverName, failure]));
+  for (const failure of second) byServer.set(failure.serverName, failure);
+  return [...byServer.values()];
+}
+
 export function coalesceSettledTurns(
   items: readonly TaskChatItem[],
   metaById: ReadonlyMap<string, SettledTurnMergeMeta>,
@@ -2015,9 +2074,11 @@ export function coalesceSettledTurns(
       ) {
         out.splice(heldIdx, 1);
         const parts = [...heldMeta.parts, ...meta.parts];
+        const mcpStartupFailures = mergeMcpStartupFailures(held.mcpStartupFailures, item.mcpStartupFailures);
         out.push({
           ...held,
           items: [...held.items, ...item.items],
+          ...(mcpStartupFailures ? { mcpStartupFailures } : {}),
           finalResponse: item.finalResponse ?? held.finalResponse,
           animateFold: held.animateFold || item.animateFold || undefined,
           summary: buildMergedTurnSummary(parts),

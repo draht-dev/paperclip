@@ -12,7 +12,9 @@
  * inventory for the mapping. No timing/motion values live here — those are
  * CSS motion tokens in ui/src/index.css.
  */
+import type { TaskChatMcpStartupFailure } from "./TaskChatRunHealthBanner";
 import type {
+  Issue,
   TaskBrowser,
   IssueAttachment,
   IssueCommentMetadata,
@@ -45,6 +47,7 @@ export type TaskChatProviderActivityFamily =
   | "safety"
   | "terminal"
   | "wait"
+  | "verification"
   | "provider_notice";
 
 export type TaskChatProviderActivityStatus =
@@ -58,6 +61,8 @@ export interface TaskChatWorkspaceChangeFile {
   deletions: number | null;
   binary: boolean;
   diff: string | null;
+  /** The patch was shortened by its producer; counts still cover all of it. */
+  diffTruncated?: boolean;
 }
 import type { IssueThreadInteraction } from "@/lib/issue-thread-interactions";
 
@@ -89,7 +94,20 @@ export interface TaskChatDiff {
   added: number;
   removed: number;
   /** Optional unified-diff-ish lines for display only. */
-  lines?: Array<{ kind: "add" | "remove" | "context"; text: string }>;
+  lines?: TaskChatDiffLine[];
+  /** True when the producer bounded the patch and lines were omitted. */
+  truncated?: boolean;
+  /**
+   * Per-file counts reported by the producer for the whole patch. When present
+   * they are authoritative; `added`/`removed` are their sums, not line counts.
+   */
+  files?: Array<{ path: string; additions: number; deletions: number; truncated: boolean }>;
+}
+
+export interface TaskChatDiffLine {
+  /** `file` starts the next file when one edit call changed several files. */
+  kind: "add" | "remove" | "context" | "hunk" | "file";
+  text: string;
 }
 
 export interface TaskChatTokenUsage {
@@ -165,6 +183,7 @@ export interface TaskChatMessageItem {
    */
   presentation?: IssueCommentPresentation | null;
   metadata?: IssueCommentMetadata | null;
+  chatMessage?: IssueCommentMetadata["chatMessage"];
   /** Agent that owns the source run, used to build run-detail links in metadata rows. */
   runAgentId?: string | null;
   /** Raw comment timestamp (ISO) — the collapsed system row shows relative time. */
@@ -379,6 +398,8 @@ export interface TaskChatProviderActivityItem {
   outputTruncated?: boolean;
   /** Index of the latest provider event coalesced into this activity. */
   transcriptIndex?: number;
+  /** When the provider first reported this activity (ISO timestamp). */
+  startedAt?: string;
 }
 
 export interface TaskChatWorkspaceChangeItem {
@@ -542,6 +563,8 @@ export interface TaskChatTurnItem {
   continuedAfterSteering?: boolean;
   /** Durable response shown after the ordered Paperclip Runner timeline. */
   finalResponse?: TaskChatMessageItem;
+  /** MCP servers the harness could not start for this run (run-health banner). */
+  mcpStartupFailures?: TaskChatMcpStartupFailure[];
   summary: {
     /** e.g. "38s" — omitted when unknown. */
     durationLabel?: string;
@@ -553,6 +576,14 @@ export interface TaskChatTurnItem {
     /** Failed/interrupted turns get a ✗ affordance instead of ✓. */
     failed?: boolean;
   };
+}
+
+export interface TaskChatTaskCreatedItem {
+  id: string;
+  kind: "task_created";
+  task: Pick<Issue, "id" | "identifier" | "title" | "status">;
+  isSubtask: boolean;
+  timestamp: string;
 }
 
 export interface TaskChatProjectCreatedItem {
@@ -589,6 +620,7 @@ export type TaskChatItem =
   | { id: string; kind: "decision_receipt"; receipt: DecisionHistoryItem }
   | { id: string; kind: "task_handoff"; handoff: ConversationTaskHandoff; animateEntry?: boolean }
   | TaskChatBrowserItem
+  | TaskChatTaskCreatedItem
   | TaskChatProjectCreatedItem
   | TaskChatSkillCreatedItem
   | TaskChatMessageItem
