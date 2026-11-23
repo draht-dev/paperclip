@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 24
+          node-version: 24.22.3
           package-manager-cache: false
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
         with:
@@ -79,7 +79,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 24
+          node-version: 24.22.3
           package-manager-cache: false
       - name: Install isolated qualification tools
         run: npm install --prefix "$RUNNER_TEMP/ci-tools" --no-audit --no-fund turbo@2.11.10 pnpm@9.15.4

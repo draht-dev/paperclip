@@ -36,7 +36,7 @@ run_with_node() {
     -v "$RESULTS_DIR:/results" \
     -e "PAPERCLIP_INSTALL_TEST_LOG=/results/$name.args" \
     -e PATH="/paperclip-scripts/install-sh-fixtures:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-    node:24-bookworm-slim \
+    node:24.22.3-bookworm-slim \
     "$@"
 }
 
@@ -84,7 +84,7 @@ docker run --rm \
   -e npm_config_registry=http://attacker-registry.invalid \
   -e PAPERCLIP_INSTALL_TEST_LOG=/results/hostile.args \
   -e PATH="/paperclip-scripts/install-sh-fixtures:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-  node:24-bookworm-slim \
+  node:24.22.3-bookworm-slim \
   bash /paperclip-scripts/install.sh --no-prompt --no-onboard
 assert_line "$RESULTS_DIR/hostile.args" "--registry=https://registry.npmjs.org"
 assert_line "$RESULTS_DIR/hostile.args" "NPM_CONFIG_REGISTRY=https://registry.npmjs.org"
@@ -140,7 +140,7 @@ docker run --rm \
   -e PAPERCLIP_INSTALL_NO_ONBOARD=1 \
   -e PAPERCLIP_INSTALL_NO_PROMPT=1 \
   -e PATH="/paperclip-scripts/install-sh-fixtures:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-  node:24-bookworm-slim \
+  node:24.22.3-bookworm-slim \
   bash /paperclip-scripts/install.sh
 assert_line "$RESULTS_DIR/env.args" "paperclipai@2026.722.0"
 assert_line "$RESULTS_DIR/env.args" "--version"

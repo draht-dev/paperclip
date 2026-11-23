@@ -53,7 +53,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 24
+          node-version: 24.22.3
           package-manager-cache: false
 
       # rust-cache hashes its absolute cache paths into the entry's version,
@@ -214,7 +214,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
 
       - name: Install dependencies
@@ -270,7 +270,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
 
       - name: Install dependencies
@@ -301,7 +301,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
 
       - name: Install dependencies
@@ -342,7 +342,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 24
+          node-version: 24.22.3
           cache: pnpm
 
       # rust-cache hashes its absolute cache paths into the entry's version,
@@ -543,7 +543,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 24
+          node-version: 24.22.3
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
@@ -568,7 +568,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 24
+          node-version: 24.22.3
       - name: Preserve the immutable source's platform contract
         id: targets
         env:
@@ -639,7 +639,7 @@ jobs:
           version: 9.15.4
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 24.22.1
+          node-version: 24.22.3
       - name: Bind immutable producer source and target
         id: identity
         env:
