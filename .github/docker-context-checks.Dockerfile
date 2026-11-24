@@ -16,10 +16,10 @@
 # installs the locked dependency tree; the existence assertions below keep
 # their committed inputs and outputs covered by this probe regardless.
 #
-# node:24-slim — the runner requires Node >= 24.11 and the production
+# node:24.22.3-slim — the runner requires Node >= 24.11 and the production
 # image builds on Node 24; the digest pin keeps the security gate's own
 # runtime immutable.
-FROM node:24-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 WORKDIR /context
 COPY . .
 # Verify ACPX release declarations against the exact Docker context.

@@ -6,6 +6,10 @@ import { isNode24ImageTag } from "./node-image-policy.mjs";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const expectedEngine = ">=24.11.0";
 const expectedTypes = "^24.0.0";
+// CI workflows (including the native provider-pack producer) and .nvmrc use
+// one exact patched release, so a security bump cannot leave setup-node on an
+// older cached 24.x. Bump this together with the pinned Node base images.
+const pinnedNodeVersion = "24.22.3";
 const failures = [];
 const skippedDirectories = new Set([".git", ".paperclip", "coverage", "data", "dist", "node_modules"]);
 
@@ -40,14 +44,10 @@ const workflowRoot = path.join(repoRoot, ".github", "workflows");
 walk(workflowRoot, (filePath) => {
   if (!/\.ya?ml$/.test(filePath)) return;
   const source = fs.readFileSync(filePath, "utf8");
-  const packProducer = relative(filePath) === ".github/workflows/release-verify.yml"
-    ? /(?:^|\n)  runner_binaries:\n[\s\S]*?(?=\n  [a-z_]+:\n|$)/.exec(source)
-    : null;
   for (const match of source.matchAll(/node-version:\s*["']?([^\s"'#]+)/g)) {
-    if (match[1] === "24.22.1" && packProducer
-      && match.index >= packProducer.index
-      && match.index < packProducer.index + packProducer[0].length) continue;
-    if (match[1] !== "24") failures.push(`${relative(filePath)}: node-version must be 24, found ${match[1]}`);
+    if (match[1] !== pinnedNodeVersion) {
+      failures.push(`${relative(filePath)}: node-version must be ${pinnedNodeVersion}, found ${match[1]}`);
+    }
   }
 });
 
@@ -63,7 +63,6 @@ walk(repoRoot, (filePath) => {
 });
 
 const requiredSourceFragments = [
-  [".nvmrc", "24"],
   ["packages/shared/src/node-version.ts", 'MINIMUM_NODE_VERSION = "24.11.0"'],
   ["scripts/install.sh", "MIN_NODE_VERSION=\"${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}.${MIN_NODE_PATCH}\""],
   ["scripts/install.sh", "MIN_NODE_MAJOR=24"],
@@ -78,6 +77,9 @@ const requiredSourceFragments = [
   ["scripts/generate-npm-package-json.mjs", `engines: { node: "${expectedEngine}" }`],
 ];
 
+const nvmrc = fs.readFileSync(path.join(repoRoot, ".nvmrc"), "utf8").trim();
+if (nvmrc !== pinnedNodeVersion) failures.push(`.nvmrc must be ${pinnedNodeVersion}, found ${nvmrc}`);
+
 for (const [filePath, fragment] of requiredSourceFragments) {
   const source = fs.readFileSync(path.join(repoRoot, filePath), "utf8");
   if (!source.includes(fragment)) failures.push(`${filePath}: missing Node 24 policy fragment ${JSON.stringify(fragment)}`);
@@ -89,4 +91,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log("Node version policy check passed (Node >=24.11.0, @types/node 24.x).");
+console.log(`Node version policy check passed (Node >=24.11.0, CI/.nvmrc ${pinnedNodeVersion}, @types/node 24.x).`);

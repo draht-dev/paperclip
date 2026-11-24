@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 24
+          node-version: 24.22.3
       - name: Check the credential-free retained-verification controls
         run: node --test tests/runner-e2e/chat-feature-testops-retained-verification.node-test.mjs
       - name: Read only the fixed retained measurement with separate executor identity
